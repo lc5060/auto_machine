@@ -1,0 +1,247 @@
+================================================================================
+ auto_machine 节点 对外接口说明（多机多串口版）
+ —— 每条都是可直接复制的单行命令，并写明返回值代表什么
+================================================================================
+
+ 适用工程：auto_machine（ROS2，RS485 / Modbus RTU，115200 8O1）
+ 管控设备：T1、V6、MAG04、MAG06（从站地址 0x01）、XYZR（从站地址 0x02）
+ 多机能力：T1 / V6 / MAG04 / MAG06 / XYZR 全部支持。
+
+--------------------------------------------------------------------------------
+ 〇、多机多串口怎么工作（本次核心，务必先读）
+--------------------------------------------------------------------------------
+ 请求字段：dev_type(设备类型) / command(命令号) / param_data(字节数组)
+
+ 对 T1 / V6 / MAG04 / MAG06 / XYZR（对齐装置）：
+   param_data[0] = 设备索引，决定命令发到哪个串口：
+     0 → 串口 0（如 /dev/ttyUSB0）
+     1 → 串口 1（如 /dev/ttyUSB1）
+   例：param_data:[0] 发到 0 号机；param_data:[1] 发到 1 号机。
+   T1/V6/XYZR 省略 param_data 时默认 0 号（兼容单机旧调用）；
+   MAG04/MAG06 必须显式提供索引。
+   下面示例统一写 param_data:[0]（0 号机），1 号机改成 [1] 即可。
+
+ 每台自动机一条独立 RS485 总线：同一串口上同时挂自动机（T1/V6/MAG，从站 0x01）
+ 和 XYZR 对齐装置（从站 0x02），靠从站地址区分，互不冲突。
+ 每台机器一个独立串口实例、独立总线锁，控制/闭环/故障轮询互不串线、互不阻塞；
+ 同一索引下自动机与 XYZR 共享该串口实例。
+ 注意：T1/V6/MAG 从站地址都是 0x01，同一条总线只能挂其中一种自动机。
+
+--------------------------------------------------------------------------------
+ 一、调用前准备
+--------------------------------------------------------------------------------
+ 启动节点（两台自动机各一条串口，每条串口同时挂自动机 + XYZR 对齐装置）：
+
+   cd ~/single && source install/setup.bash
+   ros2 run auto_machine auto_machine_node --ros-args -p "mag_serial_ports:=['/dev/ttyUSB0', '/dev/ttyUSB1']"
+
+ 说明：
+   - mag_serial_ports 顺序即设备索引顺序：第 0 个 = 0 号机，第 1 个 = 1 号机。
+   - 每台自动机的钉扣机（从站 0x01）与对齐装置（从站 0x02）共用同一个串口，
+     不需要给对齐装置单独配串口，也不用重复打开同一设备。
+   - 只挂一台自动机时可省略 mag_serial_ports，改用 serial_port（索引只接受 0）：
+       ros2 run auto_machine auto_machine_node --ros-args -p serial_port:=/dev/ttyUSB0
+   - 若已安装 udev 固定软链接（见 install_rs485_udev.sh），可把 /dev/ttyUSB0/1
+     换成固定名 /dev/ttyRS485_0、/dev/ttyRS485_1，换 USB 口/重启都不变。
+
+   如需调整闭环节奏，可追加参数（默认 500 / 300 / 30000 毫秒）：
+     -p auto_query_delay_ms:=500          # 控制后首次查询前等待
+     -p auto_query_poll_interval_ms:=300  # 轮询间隔
+     -p auto_query_timeout_ms:=30000      # 超时(毫秒)，到位会立即返回不傻等
+
+   统一服务名：/auto_machine/command
+   服务类型：auto_machine/srv/AutoMachine
+
+--------------------------------------------------------------------------------
+ 二、三类命令与返回怎么看
+--------------------------------------------------------------------------------
+ 【闭环控制】（共 23 条，本文用〔闭环〕标注）
+   节点下发动作后自动轮询状态直到到位/超时，返回里带最终状态值。
+   · 到位：success=True  err_code=0     ret_data=[高字节,低字节]（最终状态）
+   · 超时：success=False err_code=10008 ret_data=[高字节,低字节]（最后状态）
+   · 通讯异常：success=False err_code=10006
+
+ 【仅下发控制】（协议无反馈位，用〔仅下发〕标注）
+   指令写进设备即返回，设备做没做完协议无从查询。
+   · 正常：success=True err_code=0 ret_data=[]（只代表指令已发出）
+
+ 【状态查询】（用〔查询〕标注）
+   立即返回当前寄存器值，不做动作。正常：success=True err_code=0 ret_data=[高字节,低字节]
+
+ ret_data 数值换算：V = ret_data[0]*256 + ret_data[1]
+   （本工程状态值都小于 256，第 1 个字节恒为 0；例 [0,3] → V=3）
+
+ err_code 错误码表：
+   0      成功
+   10001  未知设备类型
+   10002  未知命令
+   10003  参数错误（含：MAG 设备缺 param_data[0] / 所有设备索引越界）
+   10004  功能未实现
+   10005  内部错误
+   10006  通讯失败（串口打不开 / 设备无应答 / 应答校验错）
+   10007  设备返回异常
+   10008  动作超时未到位（闭环专用）
+
+ 设备类型 dev_type：T1=1  V6=2  MAG04=3  MAG06=4  XYZR=268435457(0x10000001)
+
+--------------------------------------------------------------------------------
+ 三、MAG06（dev_type=4，钉扣机）—— 多机示例（重点）
+--------------------------------------------------------------------------------
+ 说明：MAG06 每条命令的 param_data 都带设备索引 [0] 或 [1]。
+   （MAG04 同理，只需把 dev_type 换成 3、命令号换成 M4 的。）
+
+【M6-1】复位（等复位完成）〔闭环〕—— 0 号机
+  ros2 service call /auto_machine/command auto_machine/srv/AutoMachine "{dev_type: 4, command: 262149, param_data: [0]}"
+  到位返回：success=True err_code=0 ret_data=[0,1]（准入=1 已复位可执行）
+
+【M6-1'】复位（等复位完成）〔闭环〕—— 1 号机
+  ros2 service call /auto_machine/command auto_machine/srv/AutoMachine "{dev_type: 4, command: 262149, param_data: [1]}"
+  到位返回：success=True err_code=0 ret_data=[0,1]
+  （0 号机、1 号机各走各的串口，互不串线。）
+
+【M6-2】开始缝制（等本件缝制完成）〔闭环〕 command=262146
+  0 号机：param_data:[0] → ret_data=[0,3]（准入=3 本件缝制完成）
+【M6-3】开始吸风（等吸风开）〔闭环〕 command=262145 → ret_data=[0,1]（吸风非0=开）
+【M6-4】关闭吸风（等吸风关）〔闭环〕 command=262159 → ret_data=[0,0]（吸风=0）
+【M6-5】开始理布  〔仅下发〕 command=262150 → ret_data=[]
+【M6-6】关闭理布  〔仅下发〕 command=262151 → ret_data=[]
+【M6-7】关闭气缸（等气缸复位）〔闭环〕 command=262152 → ret_data=[0,2]（理布=2，需真机确认）
+  上面简写的闭环命令，把 command 换成对应数字、param_data 换成 [0]/[1] 即可，
+  例（0 号机开始吸风）：
+  ros2 service call /auto_machine/command auto_machine/srv/AutoMachine "{dev_type: 4, command: 262145, param_data: [0]}"
+
+【M6-8】急停  〔仅下发〕 command=262147，返回 ret_data=[]
+【M6-9】人工控制  〔仅下发〕 command=262148
+【M6-10】开始吹气  〔仅下发〕 command=262153
+【M6-11】停止吹气  〔仅下发〕 command=262154
+【M6-12】压板下压  〔仅下发〕 command=262160
+【M6-13】压板抬起  〔仅下发〕 command=262161
+  （仅下发命令同样带 param_data:[0]/[1] 选设备。）
+
+—— MAG06 状态查询（同样带索引）——
+【M6-查1】吸风状态  〔查询〕 command=262155 → ret_data=[0,V]：0 关闭 / 1 开启
+【M6-查2】故障码    〔查询〕 command=262156 → ret_data=[0,V]：0 无故障 / 非0 有故障
+【M6-查3】准入状态  〔查询〕 command=262157 → ret_data=[0,V]：0/1/2/3
+【M6-查4】理布状态  〔查询〕 command=262158 → ret_data=[0,V]：0 未到位 / 1 到位 / 2 复位
+
+--------------------------------------------------------------------------------
+ 四、MAG04（dev_type=3）—— 命令集与 MAG06 相同，仅命令号不同
+--------------------------------------------------------------------------------
+ 【M4-1】复位（等复位完成）〔闭环〕 command=196613，param_data:[0] → ret_data=[0,1]
+ 【M4-2】开始缝制（等完成）〔闭环〕 command=196610 → ret_data=[0,3]
+ 【M4-3】开始吸风（等开）〔闭环〕 command=196609 → ret_data=[0,1]
+ 【M4-4】关闭吸风（等关）〔闭环〕 command=196623 → ret_data=[0,0]
+ 【M4-5】开始理布  〔仅下发〕 command=196614 → ret_data=[]
+ 【M4-6】关闭理布  〔仅下发〕 command=196615 → ret_data=[]
+ 【M4-7】关闭气缸（等复位）〔闭环〕 command=196616 → ret_data=[0,2]
+ 【M4-8】急停  〔仅下发〕 command=196611
+ 【M4-9】人工控制  〔仅下发〕 command=196612
+ 【M4-10】开始吹气  〔仅下发〕 command=196617
+ 【M4-11】停止吹气  〔仅下发〕 command=196618
+ 【M4-12】压板下压  〔仅下发〕 command=196624
+ 【M4-13】压板抬起  〔仅下发〕 command=196625
+ 【M4-查1】吸风状态  〔查询〕 command=196619
+ 【M4-查2】故障码    〔查询〕 command=196620
+ 【M4-查3】准入状态  〔查询〕 command=196621
+ 【M4-查4】理布状态  〔查询〕 command=196622
+
+--------------------------------------------------------------------------------
+ 五、T1 / V6 / XYZR（多机，param_data[0] 为设备索引）
+--------------------------------------------------------------------------------
+ 三个设备的 param_data[0] 都是自动机索引（0/1...），省略时默认 0 号；
+ 下面为 0 号机简写，1 号机调用时请显式加 param_data:[1]。
+
+—— T1（dev_type=1）——
+ 【T1-1】复位〔闭环〕 command=65550 → ret_data=[0,1] 或 [0,3]
+ 【T1-2】开始工作〔闭环〕 command=65545 → ret_data=[0,2] 或 [0,3]
+ 【T1-3】开吸风〔闭环〕 command=65548 → ret_data=[0,1]
+ 【T1-4】关吸风〔闭环〕 command=65552 → ret_data=[0,0]
+ 【T1-5】压框下压〔仅下发〕 command=65544
+ 【T1-6】压框抬起〔仅下发〕 command=65551
+ 【T1-7】暂停工作〔仅下发〕 command=65546
+ 【T1-8】下一步〔仅下发〕 command=65549
+ 【T1-查1】运行状态〔查询〕 command=65537
+ 【T1-查2】故障码〔查询〕 command=65538
+ 【T1-查3】等待状态〔查询〕 command=65539
+ 【T1-查4】吸风状态〔查询〕 command=65540
+ 【T1-查5】夹具IO 1-16〔查询〕 command=65542
+ 【T1-查6】夹具IO 17-24〔查询〕 command=65543
+
+—— V6（dev_type=2）——
+ 【V6-1】舌板伸出〔闭环〕 command=131073 → ret_data=[0,10]
+ 【V6-2】开始折叠〔闭环〕 command=131074 → ret_data=[0,26]
+ 【V6-3】折叠复位〔闭环〕 command=131086 → ret_data=[0,0]
+ 【V6-4】开鼓风机〔闭环〕 command=131087 → ret_data=[0,1]
+ 【V6-5】关鼓风机〔闭环〕 command=131088 → ret_data=[0,0]
+ 【V6-6】开始吸布〔闭环〕 command=131089 → ret_data=[0,1]
+ 【V6-7】停止吸布〔闭环〕 command=131090 → ret_data=[0,0]
+ 【V6-8】开始取料〔仅下发〕 command=131075
+ 【V6-9/10】镭射灯控制权〔仅下发〕 command=131076/131077
+ 【V6-11~14】镭射灯1~4 开关〔仅下发〕 command=131078~131085
+ 【V6-15】抚平开始/返回/复位〔仅下发〕 command=131091/131092/131093
+ 【V6-查1~7】机器状态/折叠/吸布/准入/抚平/故障码/鼓风机〔查询〕 command=131094~131100
+
+—— XYZR 对齐装置（dev_type=268435457）——
+ 说明：param_data[0] 为自动机索引（0/1...），省略默认 0；与自动机共用同一串口。
+ 【XY-1】复位〔闭环〕 command=16842753，param_data:[0] → ret_data=[0,1]
+ 【XY-2】大身布料已放好/触发视觉检测（两阶段）〔闭环〕 command=16842754，param_data:[0] → ret_data=[0,1]
+ 【XY-3/4】下发 X/Y 距离〔仅下发〕 command=16842757/16842758，param_data:[0]
+ 【XY-查1】移料结果〔查询〕 command=16842755，param_data:[0]
+ 【XY-查2】主控状态〔查询〕 command=16842756，param_data:[0]
+ 【XY-查3】故障代码〔查询〕 command=16842759，param_data:[0]
+
+--------------------------------------------------------------------------------
+ 六、故障主动上报（多机）
+--------------------------------------------------------------------------------
+ 订阅故障话题：ros2 topic echo /auto_machine/fault
+ 消息类型 auto_machine/msg/DeviceFault，字段：
+   dev_type     哪类设备
+   device_index 哪一台（所有类型都按自动机索引区分，0/1...；省略/单机时为 0）
+   fault_code   故障码/状态值
+   comm_fault   true=通讯故障（掉线）；false=设备本身故障
+
+ 打开/关闭故障上报（全局命令 command 固定 4026531841=0xF0000001）：
+   T1/V6/XYZR（param_data=[enable] 或 [enable, device_index]，后者指定自动机）：
+     ros2 service call /auto_machine/command auto_machine/srv/AutoMachine "{dev_type: 1, command: 4026531841, param_data: [1]}"
+     ros2 service call /auto_machine/command auto_machine/srv/AutoMachine "{dev_type: 1, command: 4026531841, param_data: [1, 1]}"
+     ros2 service call /auto_machine/command auto_machine/srv/AutoMachine "{dev_type: 268435457, command: 4026531841, param_data: [1, 1]}"
+   MAG（必须 2 字节）：
+     ros2 service call /auto_machine/command auto_machine/srv/AutoMachine "{dev_type: 4, command: 4026531841, param_data: [1, 0]}"
+     ros2 service call /auto_machine/command auto_machine/srv/AutoMachine "{dev_type: 4, command: 4026531841, param_data: [1, 1]}"
+  返回：success=True err_code=0 ret_data=[] 表示开关设置成功。
+ 说明：多台可同时监控，每台独立轮询对应串口、独立边沿触发，互不影响。
+       自动机与 XYZR 共用同一串口实例，同一索引下各自按从站地址轮询。
+
+--------------------------------------------------------------------------------
+ 七、闭环命令覆盖情况一览
+--------------------------------------------------------------------------------
+ 已做闭环（23 条）：T1(4) + V6(7) + MAG04(5) + MAG06(5) + XYZR(2)。
+ 不做闭环（协议无反馈位）：压框/暂停/下一步/取料/镭射灯/抚平/理布/急停/人工/
+   吹气/压板/下发 X-Y 距离。
+
+ 需真机核对的「到位目标值」（不符只改 src/closed_loop.cpp 绑定表一行）：
+   V6 折叠复位→折叠状态=0；MAG04/06 关闭气缸→理布状态=2。
+
+--------------------------------------------------------------------------------
+ 编译 / 部署
+--------------------------------------------------------------------------------
+  cd ~/single && colcon build --packages-select auto_machine && source install/setup.bash
+ 本版新增/修改文件：
+   改   include/auto_machine/auto_machine_common.hpp  新增 ModbusPool 别名
+   改   include/auto_machine/closed_loop.hpp          run/readStatus 按传入串口实例
+   改   src/closed_loop.cpp                           同上
+   改   include/auto_machine/fault_reporter.hpp       多设备监控（含 device_index）
+   改   src/fault_reporter.cpp                        同上
+   改   msg/DeviceFault.msg                           新增 device_index 字段
+   改   src/auto_machine_node.cpp                     所有类型统一 param_data[0] 多串口分发
+   改   include/auto_machine/auto_machine_xyzr.hpp    新增故障代码寄存器 0x0003
+   改   src/auto_machine_xyzr.cpp                     新增故障代码查询命令
+   改   msg/AutoMachineDef.msg                        新增 CMD_XYZR_FAULT_CODE_QUERY
+   改   udev/99-usb-rs485.rules                       按物理端口生成 ttyRS485_0/1
+   改   install_rs485_udev.sh                         更新多机说明
+   新增 serial_debug_gui.py                           tkinter 串口调试界面
+  srv/AutoMachine.srv 未改动；msg/AutoMachineDef.msg 新增 CMD_XYZR_FAULT_CODE_QUERY。
+  XYZR 对齐装置改为与 MAG 共用串口池，按 param_data[0] 多机分发（省略默认 0）。
+================================================================================
+ 文档结束
+================================================================================

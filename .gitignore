@@ -1,0 +1,22 @@
+# ---------- 编译产物（colcon / CMake） ----------
+build/
+install/
+log/
+devel/
+*.o
+*.so
+*.a
+CMakeCache.txt
+CMakeFiles/
+
+# ---------- Python ----------
+__pycache__/
+*.py[cod]
+
+# ---------- 编辑器 / 系统 ----------
+.vscode/
+.idea/
+.DS_Store
+
+# ---------- 备份包 ----------
+*.zip

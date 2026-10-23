@@ -1,0 +1,34 @@
+# USB 转 485（Silicon Labs CP210x）固定串口名（多机版）
+#
+# 背景：
+#   一个机器人可同时挂多台同类自动机（如两台 MAG06 钉扣机），每台走一条
+#   独立 RS485 串口。同款 USB-485 芯片的 VID:PID 完全相同（CP210x = 10c4:ea60），
+#   无法用 VID:PID 区分两台设备，必须按【USB 物理端口】区分。
+#
+# 规则说明：
+#   - 保留 /dev/ttyRS485 给单机场景（非 MAG 设备 T1/V6/XYZR，或只挂一台 MAG）。
+#   - 按 USB 物理端口分别生成 /dev/ttyRS485_0、/dev/ttyRS485_1 ...，索引顺序
+#     与启动节点时参数 mag_serial_ports 一一对应。
+#
+# 如何确定每台设备的物理端口（KERNELS 值）：
+#   1) 先把一个 USB-485 插到【固定口 A】，执行：
+#        udevadm info -a -n /dev/ttyUSB0 | grep -E "KERNELS|idVendor|idProduct"
+#      记下 USB 设备的端口路径，形如 1-1.1（或 1-1.1.4 等，以实际为准）。
+#   2) 再把它插到【固定口 B】，重复上面命令，记下第二个端口路径。
+#   3) 把下面两条规则的 KERNELS 值分别改成这两条路径（KERNELS 匹配父级 USB 口，
+#      不含末尾的 :1.0 接口号）。
+#
+# 安装（在仓库根目录）：
+#   sudo bash install_rs485_udev.sh
+#
+# 换芯片改 idVendor/idProduct；换物理口改 KERNELS 值。
+
+# 单机（所有 CP210x 默认仍给一个通用名，向后兼容）
+SUBSYSTEM=="tty", ATTRS{idVendor}=="10c4", ATTRS{idProduct}=="ea60", SYMLINK+="ttyRS485", MODE="0666"
+
+# 多机：按物理端口区分
+# 0 号机（本机实际：CP210x 10c4:ea60，物理口 3-1.1）
+SUBSYSTEM=="tty", ATTRS{idVendor}=="10c4", ATTRS{idProduct}=="ea60", KERNELS=="3-1.1", SYMLINK+="ttyRS485_0", MODE="0666"
+
+# 1 号机（本机实际：FTDI 0403:6015，物理口 3-1.3）
+SUBSYSTEM=="tty", ATTRS{idVendor}=="0403", ATTRS{idProduct}=="6015", KERNELS=="3-1.3", SYMLINK+="ttyRS485_1", MODE="0666"

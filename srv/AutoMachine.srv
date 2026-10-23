@@ -1,0 +1,13 @@
+# Request
+# 自动机类型，见AutoMachineDef.msg中设备类型
+uint32 dev_type
+# 命令号
+uint32 command
+# 参数数据
+uint8[] param_data
+---
+# Response
+bool success
+int32 err_code
+uint8[] ret_data
+

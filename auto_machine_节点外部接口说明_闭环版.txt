@@ -1,0 +1,456 @@
+================================================================================
+ auto_machine 节点 对外接口说明（闭环版 · 命令行手册）
+ —— 每条都是可直接复制的 ros2 service call 命令，并写明返回值代表什么
+================================================================================
+
+ 适用工程：auto_machine（ROS2，RS485 / Modbus RTU，115200 8O1）
+ 管控设备：T1、V6、MAG04、MAG06（从站地址 0x01）、XYZR（从站地址 0x02）
+ 多机能力：T1 / V6 / MAG04 / MAG06 / XYZR 全部支持。
+
+--------------------------------------------------------------------------------
+ 〇、调用前准备
+--------------------------------------------------------------------------------
+ 单机（所有设备共用 serial_port）：
+    cd ~/auto_ws && source install/setup.bash
+ros2 run auto_machine auto_machine_node --ros-args -p serial_port:=/dev/ttyUSB0 -p auto_query_timeout_ms:=60000
+
+ 多机（每台自动机一条串口，同一串口上同时挂 MAG 钉扣机 + XYZR 对齐装置）：
+    ros2 run auto_machine auto_machine_node --ros-args -p "mag_serial_ports:=['/dev/ttyRS485_0', '/dev/ttyRS485_1']"
+    · mag_serial_ports 顺序即设备索引：第 0 个 = 0 号机，第 1 个 = 1 号机。
+    · 所有设备类型（T1/V6/MAG/XYZR）都用 param_data[0] 选择自动机（0/1...）。
+    · T1/V6/XYZR 省略 param_data 时默认 0 号机（兼容单机旧调用）；
+      MAG04/MAG06 必须显式提供索引。
+    · 下面各章节示例统一写 param_data: [0]（0 号机）；1 号机把 [0] 改成 [1] 即可。
+    · 同一串口上的自动机（从站 0x01）与 XYZR（从站 0x02）靠从站地址区分，
+      共用一个 ModbusRtu 实例（独立总线锁），互不串线。
+
+ 然后在另一个终端执行下面的命令（每个新终端都要先）：
+    cd ~/ros2_ws && source install/setup.bash
+
+ 统一服务名：/auto_machine/command
+ 服务类型：auto_machine/srv/AutoMachine
+ 请求字段：dev_type(设备类型) / command(命令号) / param_data(字节数组，多数为空)
+ 返回字段：success(布尔) / err_code(错误码) / ret_data(返回字节数组)
+
+--------------------------------------------------------------------------------
+ 一、三类命令与返回怎么看（务必先读）
+--------------------------------------------------------------------------------
+  本工程的命令分三类：
+
+  【闭环控制】（共 23 条，本文用〔闭环〕标注）
+    节点下发动作后，会自动每隔一段时间查询对应状态寄存器，直到“动作到位”
+    或超时才返回。你只发这一条命令，返回里就带最终状态值，不用再手动查询。
+    · 到位返回：success=True  err_code=0     ret_data=[高字节,低字节]（最终状态值）
+    · 超时返回：success=False err_code=10008  ret_data=[高字节,低字节]（最后一次状态）
+    · 通讯异常：success=False err_code=10006  ret_data=[]（或最后状态）
+
+  【仅下发控制】（协议里没有反馈位的动作，用〔仅下发〕标注）
+    节点把指令写进设备就立即返回，设备“做没做完”协议无从查询。
+    · 正常返回：success=True  err_code=0  ret_data=[]   （只代表指令已发出）
+    这类包括：压框、暂停、下一步、取料、镭射灯、抚平、MAG 开始/关闭理布、急停、
+    人工、吹气、压板、XYZR 下发 X/Y 距离等。
+
+  【状态查询】（用〔查询〕标注）
+    立即返回当前寄存器值，不做任何动作。
+    · 正常返回：success=True  err_code=0  ret_data=[高字节,低字节]
+
+  ret_data 数值换算（本工程状态值都小于 256，所以第 1 个字节恒为 0）：
+    V = ret_data[0]*256 + ret_data[1]
+    例：ret_data=[0,10] → V=10；ret_data=[0,3] → V=3；ret_data=[0,0] → V=0
+
+  err_code 错误码表：
+    0      成功
+    10001  未知设备类型
+    10002  未知命令
+    10003  参数错误
+    10004  功能未实现（A100 目前未实现，调用返回此码）
+    10005  内部错误
+    10006  通讯失败（串口打不开 / 设备无应答 / 应答校验错）
+    10007  设备返回异常
+    10008  动作超时未到位（闭环专用：规定时间内状态一直没到目标值）
+
+  闭环 3 个可调时间参数（启动节点时加，默认值如下，单位毫秒）：
+    -p auto_query_delay_ms:=500          # 下发动作后，首次查询前等待
+    -p auto_query_poll_interval_ms:=300  # 之后每隔多久查一次
+    -p auto_query_timeout_ms:=30000      # 多久没到位就判超时（到位会立即返回，不傻等）
+  例：整件缝纫较慢时把超时调到 60 秒：
+    ros2 run auto_machine auto_machine_node --ros-args -p serial_port:=/dev/ttyUSB0 -p auto_query_timeout_ms:=60000
+
+  设备类型 dev_type：T1=1  V6=2  MAG04=3  MAG06=4  XYZR=268435457(0x10000001)
+
+================================================================================
+ 二、T1（dev_type=1）
+================================================================================
+
+【T1-1】复位  〔闭环〕
+  ros2 service call /auto_machine/command auto_machine/srv/AutoMachine "{dev_type: 1, command: 65550, param_data: [0]}"
+  到位返回：success=True err_code=0 ret_data=[0,1] 或 [0,3]
+    V 为运行状态字，bit0(最低位)=1 表示回零/复位完成。
+    V=1：复位完成；V=3：复位完成且本件缝纫也完成（V 为奇数即代表已复位）。
+  超时：success=False err_code=10008，ret_data 为最后状态（bit0 仍为 0 说明没回零）。
+
+【T1-2】开始工作（自动等到本件缝纫完成）〔闭环〕
+  ros2 service call /auto_machine/command auto_machine/srv/AutoMachine "{dev_type: 1, command: 65545, param_data: [0]}"
+  到位返回：success=True err_code=0 ret_data=[0,2] 或 [0,3]
+    bit1=1 表示本件缝纫完成。V=2：缝纫完成；V=3：复位+缝纫都完成。
+
+【T1-3】打开吸风（等吸风确实开启）〔闭环〕
+  ros2 service call /auto_machine/command auto_machine/srv/AutoMachine "{dev_type: 1, command: 65548, param_data: [0]}"
+  到位返回：success=True err_code=0 ret_data=[0,1]
+    吸风状态 V 非 0 即“已开启”（正常为 1）。
+
+【T1-4】关闭吸风（等吸风确实关闭）〔闭环〕
+  ros2 service call /auto_machine/command auto_machine/srv/AutoMachine "{dev_type: 1, command: 65552, param_data: [0]}"
+  到位返回：success=True err_code=0 ret_data=[0,0]
+    V=0 表示吸风已关闭。
+
+【T1-5】压框下压  〔仅下发·无到位反馈〕
+  ros2 service call /auto_machine/command auto_machine/srv/AutoMachine "{dev_type: 1, command: 65544, param_data: [0]}"
+  返回：success=True err_code=0 ret_data=[]（仅代表指令已发出）
+
+【T1-6】压框抬起  〔仅下发〕
+  ros2 service call /auto_machine/command auto_machine/srv/AutoMachine "{dev_type: 1, command: 65551, param_data: [0]}"
+  返回：success=True err_code=0 ret_data=[]
+
+【T1-7】暂停工作  〔仅下发〕
+  ros2 service call /auto_machine/command auto_machine/srv/AutoMachine "{dev_type: 1, command: 65546, param_data: [0]}"
+  返回：success=True err_code=0 ret_data=[]
+
+【T1-8】自动化下一步  〔仅下发〕
+  ros2 service call /auto_machine/command auto_machine/srv/AutoMachine "{dev_type: 1, command: 65549, param_data: [0]}"
+  返回：success=True err_code=0 ret_data=[]
+
+—— T1 状态查询（想随时手动查时用，立即返回）——
+
+【T1-查1】运行状态  〔查询〕
+  ros2 service call /auto_machine/command auto_machine/srv/AutoMachine "{dev_type: 1, command: 65537, param_data: [0]}"
+  返回 ret_data=[0,V]：bit0=1 已复位，bit1=1 缝纫完成。
+    V=0 未复位未缝纫；V=1 已复位；V=2 缝纫完成；V=3 两者都完成。
+
+【T1-查2】故障码  〔查询〕
+  ros2 service call /auto_machine/command auto_machine/srv/AutoMachine "{dev_type: 1, command: 65538, param_data: [0]}"
+  返回 ret_data=[0,V]：V=0 无故障；V 非 0 为故障码。
+
+【T1-查3】自动化等待状态  〔查询〕
+  ros2 service call /auto_machine/command auto_machine/srv/AutoMachine "{dev_type: 1, command: 65539, param_data: [0]}"
+  返回 ret_data=[0,V]：等待状态原始值（按现场协议解读）。
+
+【T1-查4】吸风状态  〔查询〕
+  ros2 service call /auto_machine/command auto_machine/srv/AutoMachine "{dev_type: 1, command: 65540, param_data: [0]}"
+  返回 ret_data=[0,V]：V=0 关闭；V 非 0（正常1）开启。
+
+【T1-查5】夹具 IO 状态 CH1~CH16  〔查询〕
+  ros2 service call /auto_machine/command auto_machine/srv/AutoMachine "{dev_type: 1, command: 65542, param_data: [0]}"
+  返回 ret_data=[0,V]：16 个位对应 CH1~CH16，某 bit=1 表示该通道有效。
+
+【T1-查6】夹具 IO 状态 CH17~CH24  〔查询〕
+  ros2 service call /auto_machine/command auto_machine/srv/AutoMachine "{dev_type: 1, command: 65543, param_data: [0]}"
+  返回 ret_data=[0,V]：低 8 位对应 CH17~CH24，某 bit=1 表示该通道有效。
+
+================================================================================
+ 三、V6（dev_type=2）
+================================================================================
+
+【V6-1】舌板伸出（等伸出到位）〔闭环〕
+  ros2 service call /auto_machine/command auto_machine/srv/AutoMachine "{dev_type: 2, command: 131073, param_data: [0]}"
+  到位返回：success=True err_code=0 ret_data=[0,10]
+    折叠状态 V=10：已伸出到位，进入“等待折叠”。
+
+【V6-2】开始折叠（等折叠完成）〔闭环〕
+  ros2 service call /auto_machine/command auto_machine/srv/AutoMachine "{dev_type: 2, command: 131074, param_data: [0]}"
+  到位返回：success=True err_code=0 ret_data=[0,26]
+    V=26：折叠完成，进入“等待取料”。
+
+【V6-3】折叠复位（等复位完成）〔闭环〕
+  ros2 service call /auto_machine/command auto_machine/srv/AutoMachine "{dev_type: 2, command: 131086, param_data: [0]}"
+  到位返回：success=True err_code=0 ret_data=[0,0]
+    V=0：回到“等待舌板伸出”初始态。
+    （舌板伸出后发此命令→舌板复位；折叠完成后发此命令→折叠复位。）
+    注：目标值 0 为按状态机推断，真机若不同，改 closed_loop.cpp 该行即可。
+
+【V6-4】开启鼓风机（等鼓风开）〔闭环〕
+  ros2 service call /auto_machine/command auto_machine/srv/AutoMachine "{dev_type: 2, command: 131087, param_data: [0]}"
+  到位返回：success=True err_code=0 ret_data=[0,1]   （V=1 鼓风已开启）
+
+【V6-5】关闭鼓风机（等鼓风关）〔闭环〕
+  ros2 service call /auto_machine/command auto_machine/srv/AutoMachine "{dev_type: 2, command: 131088, param_data: [0]}"
+  到位返回：success=True err_code=0 ret_data=[0,0]   （V=0 鼓风已关闭）
+
+【V6-6】开始吸布（等吸布开）〔闭环〕
+  ros2 service call /auto_machine/command auto_machine/srv/AutoMachine "{dev_type: 2, command: 131089, param_data: [0]}"
+  到位返回：success=True err_code=0 ret_data=[0,1]   （V=1 吸布已开启）
+
+【V6-7】停止吸布（等吸布关）〔闭环〕
+  ros2 service call /auto_machine/command auto_machine/srv/AutoMachine "{dev_type: 2, command: 131090, param_data: [0]}"
+  到位返回：success=True err_code=0 ret_data=[0,0]   （V=0 吸布已关闭）
+
+【V6-8】开始取料  〔仅下发〕
+  ros2 service call /auto_machine/command auto_machine/srv/AutoMachine "{dev_type: 2, command: 131075, param_data: [0]}"
+  返回：success=True err_code=0 ret_data=[]
+
+【V6-9】镭射灯控制权→机器人  〔仅下发〕
+  ros2 service call /auto_machine/command auto_machine/srv/AutoMachine "{dev_type: 2, command: 131076, param_data: [0]}"
+  返回：success=True err_code=0 ret_data=[]
+【V6-10】镭射灯控制权→屏幕(MCU)  〔仅下发〕
+  ros2 service call /auto_machine/command auto_machine/srv/AutoMachine "{dev_type: 2, command: 131077, param_data: [0]}"
+  返回：success=True err_code=0 ret_data=[]
+
+【V6-11】镭射灯1 开 / 关  〔仅下发〕
+  开：ros2 service call /auto_machine/command auto_machine/srv/AutoMachine "{dev_type: 2, command: 131078, param_data: [0]}"
+  关：ros2 service call /auto_machine/command auto_machine/srv/AutoMachine "{dev_type: 2, command: 131079, param_data: [0]}"
+  返回均为：success=True err_code=0 ret_data=[]
+【V6-12】镭射灯2 开 / 关  〔仅下发〕  开 131080 / 关 131081
+【V6-13】镭射灯3 开 / 关  〔仅下发〕  开 131082 / 关 131083
+【V6-14】镭射灯4 开 / 关  〔仅下发〕  开 131084 / 关 131085
+  例（灯3开，把 command 换成对应数字即可）：
+  ros2 service call /auto_machine/command auto_machine/srv/AutoMachine "{dev_type: 2, command: 131082, param_data: [0]}"
+
+【V6-15】抚平：开始 / 返回起始位置 / 复位  〔仅下发〕
+  开始 131091：ros2 service call /auto_machine/command auto_machine/srv/AutoMachine "{dev_type: 2, command: 131091, param_data: [0]}"
+  返回起始 131092：把 command 换成 131092
+  抚平复位 131093：把 command 换成 131093
+  返回均为：success=True err_code=0 ret_data=[]
+
+—— V6 状态查询 ——
+
+【V6-查1】机器状态  〔查询〕
+  ros2 service call /auto_machine/command auto_machine/srv/AutoMachine "{dev_type: 2, command: 131094, param_data: [0]}"
+  返回 ret_data=[0,V]：V=2 表示处于缝制界面（其余值按现场协议）。
+
+【V6-查2】折叠状态  〔查询〕
+  ros2 service call /auto_machine/command auto_machine/srv/AutoMachine "{dev_type: 2, command: 131095, param_data: [0]}"
+  返回 ret_data=[0,V]：V=0 等待舌板伸出；V=10 等待折叠；V=26 等待取料。
+
+【V6-查3】吸布状态  〔查询〕
+  ros2 service call /auto_machine/command auto_machine/srv/AutoMachine "{dev_type: 2, command: 131096, param_data: [0]}"
+  返回 ret_data=[0,V]：V=0 未开启；V=1 已开启。
+
+【V6-查4】准入状态  〔查询〕
+  ros2 service call /auto_machine/command auto_machine/srv/AutoMachine "{dev_type: 2, command: 131097, param_data: [0]}"
+  返回 ret_data=[0,V]：准入状态原始值（按现场协议解读）。
+
+【V6-查5】抚平状态  〔查询〕
+  ros2 service call /auto_machine/command auto_machine/srv/AutoMachine "{dev_type: 2, command: 131098, param_data: [0]}"
+  返回 ret_data=[0,V]：抚平状态原始值（按现场协议解读）。
+
+【V6-查6】故障码  〔查询〕
+  ros2 service call /auto_machine/command auto_machine/srv/AutoMachine "{dev_type: 2, command: 131099, param_data: [0]}"
+  返回 ret_data=[0,V]：V=0 无故障；V 非 0 有故障。
+
+【V6-查7】鼓风机状态  〔查询〕
+  ros2 service call /auto_machine/command auto_machine/srv/AutoMachine "{dev_type: 2, command: 131100, param_data: [0]}"
+  返回 ret_data=[0,V]：V=0 未开启；V=1 已开启。
+
+================================================================================
+ 四、MAG04（dev_type=3）
+================================================================================
+
+【M4-1】复位（等复位完成）〔闭环〕
+  ros2 service call /auto_machine/command auto_machine/srv/AutoMachine "{dev_type: 3, command: 196613, param_data: [0]}"
+  到位返回：success=True err_code=0 ret_data=[0,1]
+    准入状态 V=1：机器已完成复位、可执行。
+
+【M4-2】开始缝制（等本件缝制完成）〔闭环〕
+  ros2 service call /auto_machine/command auto_machine/srv/AutoMachine "{dev_type: 3, command: 196610, param_data: [0]}"
+  到位返回：success=True err_code=0 ret_data=[0,3]
+    准入状态 V=3：本件缝制已完成。
+
+【M4-3】开始吸风（等吸风开）〔闭环〕
+  ros2 service call /auto_machine/command auto_machine/srv/AutoMachine "{dev_type: 3, command: 196609, param_data: [0]}"
+  到位返回：success=True err_code=0 ret_data=[0,1]   （吸风 V 非0=开，正常1）
+
+【M4-4】关闭吸风（等吸风关）〔闭环〕
+  ros2 service call /auto_machine/command auto_machine/srv/AutoMachine "{dev_type: 3, command: 196623, param_data: [0]}"
+  到位返回：success=True err_code=0 ret_data=[0,0]   （V=0 吸风关闭）
+
+【M4-5】开始理布  〔仅下发〕
+  ros2 service call /auto_machine/command auto_machine/srv/AutoMachine "{dev_type: 3, command: 196614, param_data: [0]}"
+  返回：success=True err_code=0 ret_data=[]
+  说明：理布机构开关按开环处理，写 D104=1 后立即返回，不再等待气缸到位。
+
+【M4-6】关闭理布  〔仅下发〕
+  ros2 service call /auto_machine/command auto_machine/srv/AutoMachine "{dev_type: 3, command: 196615, param_data: [0]}"
+  返回：success=True err_code=0 ret_data=[]
+  说明：理布机构开关按开环处理，写 D104=2 后立即返回，不再等待气缸复位。
+
+【M4-7】关闭气缸（等气缸复位）〔闭环〕
+  ros2 service call /auto_machine/command auto_machine/srv/AutoMachine "{dev_type: 3, command: 196616, param_data: [0]}"
+  到位返回：success=True err_code=0 ret_data=[0,2]   （理布 V=2 气缸复位）
+  注：同上，目标值 2 需真机确认。
+
+【M4-8】急停  〔仅下发〕
+  ros2 service call /auto_machine/command auto_machine/srv/AutoMachine "{dev_type: 3, command: 196611, param_data: [0]}"
+  返回：success=True err_code=0 ret_data=[]
+【M4-9】人工控制  〔仅下发〕
+  ros2 service call /auto_machine/command auto_machine/srv/AutoMachine "{dev_type: 3, command: 196612, param_data: [0]}"
+  返回：success=True err_code=0 ret_data=[]
+【M4-10】开始吹气  〔仅下发〕 command=196617，返回 ret_data=[]
+【M4-11】停止吹气  〔仅下发〕 command=196618，返回 ret_data=[]
+【M4-12】压板下压  〔仅下发〕 command=196624，返回 ret_data=[]
+【M4-13】压板抬起  〔仅下发〕 command=196625，返回 ret_data=[]
+
+—— MAG04 状态查询 ——
+【M4-查1】吸风状态  〔查询〕
+  ros2 service call /auto_machine/command auto_machine/srv/AutoMachine "{dev_type: 3, command: 196619, param_data: [0]}"
+  返回 ret_data=[0,V]：V=0 关闭；V=1 开启。
+【M4-查2】故障码  〔查询〕
+  ros2 service call /auto_machine/command auto_machine/srv/AutoMachine "{dev_type: 3, command: 196620, param_data: [0]}"
+  返回 ret_data=[0,V]：V=0 无故障；V 非 0 有故障。
+【M4-查3】准入状态  〔查询〕
+  ros2 service call /auto_machine/command auto_machine/srv/AutoMachine "{dev_type: 3, command: 196621, param_data: [0]}"
+  返回 ret_data=[0,V]：V=0 未复位不可执行；V=1 已复位可执行；V=2 未完成当前件缝制；V=3 已完成当前件缝制。
+【M4-查4】理布状态  〔查询〕
+  ros2 service call /auto_machine/command auto_machine/srv/AutoMachine "{dev_type: 3, command: 196622, param_data: [0]}"
+  返回 ret_data=[0,V]：V=0 气缸未到位；V=1 气缸到位；V=2 气缸复位。
+
+================================================================================
+ 五、MAG06（dev_type=4）—— 命令集与 MAG04 完全相同，仅命令号不同
+================================================================================
+
+【M6-1】复位（等复位完成）〔闭环〕
+  ros2 service call /auto_machine/command auto_machine/srv/AutoMachine "{dev_type: 4, command: 262149, param_data: [0]}"
+  到位返回：success=True err_code=0 ret_data=[0,1]   （准入=1 已复位可执行）
+【M6-2】开始缝制（等本件缝制完成）〔闭环〕
+  ros2 service call /auto_machine/command auto_machine/srv/AutoMachine "{dev_type: 4, command: 262146, param_data: [0]}"
+  到位返回：success=True err_code=0 ret_data=[0,3]   （准入=3 本件缝制完成）
+【M6-3】开始吸风（等吸风开）〔闭环〕 command=262145 → ret_data=[0,1]（吸风非0=开）
+【M6-4】关闭吸风（等吸风关）〔闭环〕 command=262159 → ret_data=[0,0]（吸风=0）
+【M6-5】开始理布  〔仅下发〕 command=262150 → ret_data=[]
+【M6-6】关闭理布  〔仅下发〕 command=262151 → ret_data=[]
+【M6-7】关闭气缸（等气缸复位）〔闭环〕 command=262152 → ret_data=[0,2]（理布=2，需真机确认）
+  上面简写的几条，把下面命令里的 command 数字换掉即可，例（M6-3 开吸风）：
+  ros2 service call /auto_machine/command auto_machine/srv/AutoMachine "{dev_type: 4, command: 262145, param_data: [0]}"
+
+【M6-8】急停  〔仅下发〕 command=262147，返回 ret_data=[]
+【M6-9】人工控制  〔仅下发〕 command=262148，返回 ret_data=[]
+【M6-10】开始吹气  〔仅下发〕 command=262153，返回 ret_data=[]
+【M6-11】停止吹气  〔仅下发〕 command=262154，返回 ret_data=[]
+【M6-12】压板下压  〔仅下发〕 command=262160，返回 ret_data=[]
+【M6-13】压板抬起  〔仅下发〕 command=262161，返回 ret_data=[]
+
+—— MAG06 状态查询 ——
+【M6-查1】吸风状态  〔查询〕 command=262155 → ret_data=[0,V]：0 关闭 / 1 开启
+【M6-查2】故障码    〔查询〕 command=262156 → ret_data=[0,V]：0 无故障 / 非0 有故障
+【M6-查3】准入状态  〔查询〕
+  ros2 service call /auto_machine/command auto_machine/srv/AutoMachine "{dev_type: 4, command: 262157, param_data: [0]}"
+  返回 ret_data=[0,V]：0 未复位不可执行 / 1 已复位可执行 / 2 未完成当前件 / 3 已完成当前件。
+【M6-查4】理布状态  〔查询〕 command=262158 → ret_data=[0,V]：0 未到位 / 1 到位 / 2 复位
+
+================================================================================
+ 六、XYZR 对齐装置（dev_type=268435457，即 0x10000001，从站 0x02）
+================================================================================
+ 多机说明：
+   param_data[0] 为自动机索引（0/1...），与 mag_serial_ports 顺序一致；
+   省略时默认 0 号（兼容单机旧调用）。下面示例以 0 号机 param_data:[0] 为例，
+   1 号机把 [0] 改成 [1] 即可。
+   同一串口上 MAG 钉扣机走从站 0x01，本对齐装置走从站 0x02，互不影响。
+
+【XY-1】复位 / 主控回零（等回到就绪）〔闭环〕
+  ros2 service call /auto_machine/command auto_machine/srv/AutoMachine "{dev_type: 268435457, command: 16842753, param_data: [0]}"
+  到位返回：success=True err_code=0 ret_data=[0,1]
+    主控状态 V=1：准备就绪、可接收命令。
+  过程中主控会经历 V=10（执行中/回零中），到位后变 V=1。
+
+【XY-2】大身布料已放好，触发视觉检测+移料（两阶段闭环，等移料成功）〔闭环〕
+  ros2 service call /auto_machine/command auto_machine/srv/AutoMachine "{dev_type: 268435457, command: 16842754, param_data: [0]}"
+  节点内部自动做两阶段判断：先等“主控状态=11（执行完成）”，再读“移料结果”。
+  到位返回：success=True err_code=0 ret_data=[0,1]
+    最终 ret_data 是移料结果：V=1 移料成功、已移到位，可进行下一步缝纫；
+    若移料失败 V=0，闭环判为未到位，继续等到超时后返回 success=False err_code=10008。
+
+【XY-3】下发 X 轴第一次移料距离  〔仅下发〕
+  ros2 service call /auto_machine/command auto_machine/srv/AutoMachine "{dev_type: 268435457, command: 16842757, param_data: [0]}"
+  返回：success=True err_code=0 ret_data=[]
+【XY-4】下发 Y 轴第一次移料距离  〔仅下发〕
+  ros2 service call /auto_machine/command auto_machine/srv/AutoMachine "{dev_type: 268435457, command: 16842758, param_data: [0]}"
+  返回：success=True err_code=0 ret_data=[]
+  （当前节点按程序内固定值下发；param_data[0] 仍作为自动机索引，不要填距离值。）
+
+—— XYZR 状态查询 ——
+【XY-查1】移料结果  〔查询〕
+  ros2 service call /auto_machine/command auto_machine/srv/AutoMachine "{dev_type: 268435457, command: 16842755, param_data: [0]}"
+  返回 ret_data=[0,V]：V=0 移料失败；V=1 移料成功、可进入下一步缝纫。
+【XY-查2】主控状态  〔查询〕
+  ros2 service call /auto_machine/command auto_machine/srv/AutoMachine "{dev_type: 268435457, command: 16842756, param_data: [0]}"
+  返回 ret_data=[0,V]：
+    V=0   待机（空闲，等待指令）
+    V=1   准备就绪，可接收命令
+    V=10  执行中（正在移料）
+    V=11  执行完成，等待确认
+    V=20  暂停
+    V=100 故障
+【XY-查3】故障代码  〔查询〕
+  ros2 service call /auto_machine/command auto_machine/srv/AutoMachine "{dev_type: 268435457, command: 16842759, param_data: [0]}"
+  返回 ret_data=[0,V]：输入寄存器 0x0003 的故障代码原始值。
+
+================================================================================
+ 七、故障主动上报（话题 + 开关）
+================================================================================
+  故障是节点后台线程主动轮询设备、发现异常后“推”上来的，走话题（不是服务返回）。
+
+  订阅故障话题（有故障会自动打印，无需自己轮询）：
+    ros2 topic echo /auto_machine/fault
+  消息类型 auto_machine/msg/DeviceFault，主要字段：
+    dev_type   哪台设备
+    fault_code 故障码/状态值
+    comm_fault true=通讯故障（设备掉线/串口读失败）；false=设备本身故障
+  说明：开启监控后后台周期轮询（周期参数 fault_poll_interval_ms，默认 1000ms），
+        状态发生变化（边沿）才推一次，开启瞬间会先发一条当前状态作为基准。
+        T1/V6/MAG：故障码非 0 即报故障；XYZR：主控状态=100 才算故障。
+        （XYZR 的 0x0003 故障代码可用【XY-查3】单独查询。）
+
+  打开 / 关闭某设备的故障上报（全局命令，command 固定 4026531841=0xF0000001）：
+    打开 T1 故障上报：
+    ros2 service call /auto_machine/command auto_machine/srv/AutoMachine "{dev_type: 1, command: 4026531841, param_data: [1]}"
+    关闭 T1 故障上报：
+    ros2 service call /auto_machine/command auto_machine/srv/AutoMachine "{dev_type: 1, command: 4026531841, param_data: [0]}"
+    （所有类型都支持 param_data:[enable, device_index] 指定自动机；
+      T1/V6/XYZR 也可只给 1 字节 [enable]，默认 0 号机；MAG 必须 2 字节。）
+     打开 0 号 T1 故障上报：
+     ros2 service call /auto_machine/command auto_machine/srv/AutoMachine "{dev_type: 1, command: 4026531841, param_data: [1, 0]}"
+     打开 0 号 MAG06 故障上报：
+     ros2 service call /auto_machine/command auto_machine/srv/AutoMachine "{dev_type: 4, command: 4026531841, param_data: [1, 0]}"
+     打开 1 号 XYZR 故障上报：
+     ros2 service call /auto_machine/command auto_machine/srv/AutoMachine "{dev_type: 268435457, command: 4026531841, param_data: [1, 1]}"
+    返回：success=True err_code=0 ret_data=[] 表示开关设置成功。
+
+================================================================================
+ 八、闭环命令覆盖情况一览
+================================================================================
+ 已做闭环（发一条即等到完成，共 23 条）：
+   T1：复位、开始工作、开吸风、关吸风（4）
+   V6：舌板伸出、开始折叠、折叠复位、开/关鼓风机、开始/停止吸布（7）
+   MAG04：复位、开始缝制、开/关吸风、关闭气缸（5）
+   MAG06：同 MAG04（5）
+   XYZR：复位、触发视觉检测（2）
+ 不做闭环（协议无反馈位，仅下发）：
+   T1 压框/暂停/下一步；V6 取料/镭射灯控制/镭射灯1~4/抚平；
+   MAG04、MAG06 开始理布/关闭理布/急停/人工/吹气/压板；XYZR 下发 X/Y 距离。
+
+ 无硬件自测：用 fake_modbus_slave_closedloop.py（会模拟动作到位）+
+ test_closed_loop.py（23 条一键自测，预期 PASS 23/23），完整步骤见
+ 《闭环无硬件测试说明.txt》。
+
+ 需真机核对的“到位目标值”（不符只改 src/closed_loop.cpp 绑定表一行）：
+   V6 折叠复位→折叠状态=0；MAG04/06 关闭气缸→理布状态=2。
+
+--------------------------------------------------------------------------------
+ 编译 / 部署
+--------------------------------------------------------------------------------
+  把改动同步到 ~/ros2_ws/src/auto_machine 后，在工作空间根目录执行：
+    cd ~/ros2_ws && colcon build --packages-select auto_machine && source install/setup.bash
+  本版新增/修改文件：
+    新增 include/auto_machine/closed_loop.hpp     闭环绑定结构 + 执行器声明
+    新增 src/closed_loop.cpp                      绑定表 + 延时轮询实现
+    改   include/auto_machine/auto_machine_common.hpp  新增错误码 10008
+    改   src/auto_machine_node.cpp                所有设备类型统一 param_data[0] 多串口分发
+    改   include/auto_machine/auto_machine_xyzr.hpp  新增故障代码寄存器 0x0003
+    改   src/auto_machine_xyzr.cpp               新增故障代码查询命令
+    改   msg/AutoMachineDef.msg                  新增 CMD_XYZR_FAULT_CODE_QUERY
+    改   CMakeLists.txt                           加入 src/closed_loop.cpp
+  srv/AutoMachine.srv 未改动；msg/AutoMachineDef.msg 新增 CMD_XYZR_FAULT_CODE_QUERY。
+  上层调用代码接口不变；多机时建议所有设备命令都显式带 param_data[0]。
+
+================================================================================
+ 文档结束
+================================================================================
