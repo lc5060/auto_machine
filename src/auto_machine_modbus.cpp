@@ -326,11 +326,9 @@ bool ModbusRtu::writeSingleRegister(uint8_t slave_addr, uint16_t reg_addr,
   bool success = transaction(slave_addr, req, 4, rsp) && rsp.size() == 6 &&
                  rsp[1] == 0x06;
 
-  // 写操作完成后清除接收缓冲区，避免RS485回影影响后续数据接收
-  if (success) {
-    tcflush(fd_, TCIOFLUSH);
-  }
-
+  // 注意：这里不做 tcflush。bus_mutex_ 已在 transaction() 返回时释放，
+  // 在锁外清理接收缓冲会冲掉其它线程（另一串口请求、故障轮询）正在等待的应答。
+  // 残留回影统一由下一次 transaction() 持锁后开头的 TCIOFLUSH 清理。
   return success;
 }
 
@@ -359,11 +357,7 @@ bool ModbusRtu::writeMultipleRegisters(uint8_t slave_addr, uint16_t reg_addr,
   bool success = transaction(slave_addr, req, 4, rsp) && rsp.size() == 6 &&
                  rsp[1] == 0x10;
 
-  // 写操作完成后清除接收缓冲区，避免RS485回影影响后续数据接收
-  if (success) {
-    tcflush(fd_, TCIOFLUSH);
-  }
-
+  // 注意：锁外不做 tcflush，理由同 writeSingleRegister（会冲掉其它线程的应答）
   return success;
 }
 
@@ -381,11 +375,7 @@ bool ModbusRtu::writeSingleCoil(uint8_t slave_addr, uint16_t coil_addr,
   bool success = transaction(slave_addr, req, 4, rsp) && rsp.size() == 6 &&
                  rsp[1] == 0x05;
 
-  // 写操作完成后清除接收缓冲区，避免RS485回影影响后续数据接收
-  if (success) {
-    tcflush(fd_, TCIOFLUSH);
-  }
-
+  // 注意：锁外不做 tcflush，理由同 writeSingleRegister（会冲掉其它线程的应答）
   return success;
 }
 
