@@ -31,20 +31,6 @@ int32_t XyzrProtocol::handle(uint32_t command, const uint8_t *param_data,
       }
       break;
 
-    case AutoMachineDef::CMD_XYZR_FIRST_X_DISTANCE:
-      // 发送第一次移料X距离
-      if (!modbus_->writeSingleRegister(slave_addr_, xyzr_reg::X_DISTANCE, 0x0001)) {
-        return err_code::ERR_COMM;
-      }
-      break;
-
-    case AutoMachineDef::CMD_XYZR_FIRST_Y_DISTANCE:
-      // 发送第一次移料Y距离
-      if (!modbus_->writeSingleRegister(slave_addr_, xyzr_reg::Y_DISTANCE, 0x0001)) {
-        return err_code::ERR_COMM;
-      }
-      break;
-
     // ---------------- 查询类（输入寄存器，功能码 0x04，1 个寄存器） ----------------
     case AutoMachineDef::CMD_XYZR_ADJUST_CLOTH_STATUS_QUERY:
       // 移料状态查询
@@ -87,8 +73,6 @@ HandlerMap createXyzrHandlers(std::shared_ptr<ModbusRtu> modbus) {
       AutoMachineDef::CMD_XYZR_ADJUST_CLOTH_STATUS_QUERY,
       AutoMachineDef::CMD_XYZR_STATUS_QUERY,
       AutoMachineDef::CMD_XYZR_FAULT_CODE_QUERY,
-      AutoMachineDef::CMD_XYZR_FIRST_X_DISTANCE,
-      AutoMachineDef::CMD_XYZR_FIRST_Y_DISTANCE,
   };
   for (uint32_t cmd : cmds) {
     auto p = protocol;

@@ -17,8 +17,8 @@ constexpr uint8_t XYZR_MODBUS_ADDR = 0x02;
 namespace xyzr_reg {
 constexpr uint16_t RESET = 0x0000;      // 复位 1-主控回零，其他值无效
 constexpr uint16_t CLOTH_READY = 0x0001;  // 布料已放好 1-触发视觉检测，其他值无效
-constexpr uint16_t X_DISTANCE = 0x0002;   // X轴第一次移料距离，单位 mm
-constexpr uint16_t Y_DISTANCE = 0x0003;   // Y轴第一次移料距离，单位 mm
+// 注：新协议写空间只保留 RESET 与 CLOTH_READY 两个寄存器，
+//     旧的 X/Y 移料距离寄存器（0x0002 / 0x0003）已删除，不要再加回来。
 }  // namespace xyzr_reg
 
 /**

@@ -48,7 +48,7 @@ ros2 run auto_machine auto_machine_node --ros-args -p serial_port:=/dev/ttyUSB0 
     节点把指令写进设备就立即返回，设备“做没做完”协议无从查询。
     · 正常返回：success=True  err_code=0  ret_data=[]   （只代表指令已发出）
     这类包括：压框、暂停、下一步、取料、镭射灯、抚平、MAG 开始/关闭理布、急停、
-    人工、吹气、压板、XYZR 下发 X/Y 距离等。
+    人工、吹气、压板等。
 
   【状态查询】（用〔查询〕标注）
     立即返回当前寄存器值，不做任何动作。
@@ -383,14 +383,6 @@ ros2 run auto_machine auto_machine_node --ros-args -p serial_port:=/dev/ttyUSB0 
     最终 ret_data 是移料结果：V=1 移料成功、已移到位，可进行下一步缝纫；
     若移料失败 V=0，闭环判为未到位，继续等到超时后返回 success=False err_code=10008。
 
-【XY-3】下发 X 轴第一次移料距离  〔仅下发〕
-  ros2 service call /auto_machine/command auto_machine/srv/AutoMachine "{dev_type: 268435457, command: 16842757, param_data: [0]}"
-  返回：success=True err_code=0 ret_data=[]
-【XY-4】下发 Y 轴第一次移料距离  〔仅下发〕
-  ros2 service call /auto_machine/command auto_machine/srv/AutoMachine "{dev_type: 268435457, command: 16842758, param_data: [0]}"
-  返回：success=True err_code=0 ret_data=[]
-  （当前节点按程序内固定值下发；param_data[0] 仍作为自动机索引，不要填距离值。）
-
 —— XYZR 状态查询 ——
 【XY-查1】移料结果  〔查询〕
   ros2 service call /auto_machine/command auto_machine/srv/AutoMachine "{dev_type: 268435457, command: 16842755, param_data: [0]}"
@@ -450,7 +442,7 @@ ros2 run auto_machine auto_machine_node --ros-args -p serial_port:=/dev/ttyUSB0 
    XYZR：复位、触发视觉检测（2）
  不做闭环（协议无反馈位，仅下发）：
    T1 压框/暂停/下一步；V6 取料/镭射灯控制/镭射灯1~4/抚平；
-   MAG04、MAG06 开始理布/关闭理布/急停/人工/吹气/压板；XYZR 下发 X/Y 距离。
+   MAG04、MAG06 开始理布/关闭理布/急停/人工/吹气/压板。
 
  无硬件自测：用 fake_modbus_slave_closedloop.py（会模拟动作到位）+
  test_closed_loop.py（23 条一键自测，预期 PASS 23/23），完整步骤见

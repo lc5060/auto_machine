@@ -185,7 +185,6 @@
  说明：param_data[0] 为自动机索引（0/1...），省略默认 0；与自动机共用同一串口。
  【XY-1】复位〔闭环〕 command=16842753，param_data:[0] → ret_data=[0,1]
  【XY-2】大身布料已放好/触发视觉检测（两阶段）〔闭环〕 command=16842754，param_data:[0] → ret_data=[0,1]
- 【XY-3/4】下发 X/Y 距离〔仅下发〕 command=16842757/16842758，param_data:[0]
  【XY-查1】移料结果〔查询〕 command=16842755，param_data:[0]
  【XY-查2】主控状态〔查询〕 command=16842756，param_data:[0]
  【XY-查3】故障代码〔查询〕 command=16842759，param_data:[0]
