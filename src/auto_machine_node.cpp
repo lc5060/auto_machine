@@ -1,9 +1,12 @@
 #include <rclcpp/rclcpp.hpp>
+#include <rclcpp/executors/multi_threaded_executor.hpp>
 #include <auto_machine/srv/auto_machine.hpp>
 
+#include <algorithm>
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -79,6 +82,13 @@ public:
       }
     }
 
+    // 串口数量：执行器线程数与「每串口闭环占用锁」都按它初始化
+    port_count_ = mag_pool.empty() ? 1 : mag_pool.size();
+    port_closed_loop_guard_.reserve(port_count_);
+    for (size_t i = 0; i < port_count_; ++i) {
+      port_closed_loop_guard_.push_back(std::make_unique<std::mutex>());
+    }
+
     // 所有设备类型共享同一个串口池：索引 i 对应第 i 台自动机的串口。
     // 同一串口上同时挂自动机（T1/V6/MAG，从站 0x01）和对齐装置（XYZR，从站
     // 0x02），靠从站地址区分，所以自动机与对齐装置共享该串口实例。
@@ -92,10 +102,15 @@ public:
     // 命令处理表初始化（各设备命令号 -> 处理函数，按设备索引分表）
     init_command_tables();
 
+    // 命令服务挂到可重入回调组：配合 MultiThreadedExecutor，
+    // 不同串口的请求可以由不同线程同时处理（默认互斥回调组会强制串行）。
+    command_callback_group_ =
+        create_callback_group(rclcpp::CallbackGroupType::Reentrant);
     service_ = create_service<AutoMachineSrv>(
         "auto_machine/command",
         std::bind(&AutoMachineNode::handle_request, this,
-                  std::placeholders::_1, std::placeholders::_2));
+                  std::placeholders::_1, std::placeholders::_2),
+        rclcpp::ServicesQoS(), command_callback_group_);
 
     // ---------------- 故障主动上报 ----------------
     fault_reporter_ = std::make_unique<auto_machine::FaultReporter>(
@@ -112,9 +127,24 @@ public:
         auto_query_delay_ms, auto_query_poll_interval_ms,
         auto_query_timeout_ms);
 
-    RCLCPP_INFO(get_logger(), "auto_machine_node 启动，服务: auto_machine/command, "
-                              "主题: auto_machine/fault");
+    // ---------------- 执行器并发 ----------------
+    // executor_threads：0（默认）= 按串口数自动推导，保证每个串口至少有一个
+    // 线程可用（最坏情况是 N 个串口各跑一个闭环，各占一个线程）。
+    const int executor_threads_param =
+        declare_parameter<int>("executor_threads", 0);
+    executor_threads_ =
+        executor_threads_param > 0
+            ? static_cast<size_t>(executor_threads_param)
+            : std::max<size_t>(4, port_count_ * 2);
+
+    RCLCPP_INFO(get_logger(),
+                "auto_machine_node 启动，服务: auto_machine/command, "
+                "主题: auto_machine/fault，串口数: %zu，执行器线程数: %zu",
+                port_count_, executor_threads_);
   }
+
+  /// 执行器线程数：main() 据此创建 MultiThreadedExecutor
+  size_t executorThreads() const { return executor_threads_; }
 
 private:
   using Handler = auto_machine::Handler;
@@ -195,6 +225,30 @@ private:
       fill_error(response, auto_machine::err_code::ERR_UNKNOWN_COMMAND,
                  "未知命令号: 0x" + to_hex(command));
       return;
+    }
+
+    // 4.5 同串口闭环互斥
+    //     只有「会进入闭环等待」的控制命令才占用该串口，避免同一串口上两个闭环
+    //     交替读同一个状态寄存器。抢不到立即返回 ERR_BUSY（不排队、不占线程）；
+    //     查询/急停/吹气等单帧命令不占位，可在闭环等待期间插入执行。
+    std::unique_lock<std::mutex> port_lock;
+    if (auto_machine::ClosedLoopExecutor::find(dev_type, command) != nullptr) {
+      if (device_index >= port_closed_loop_guard_.size()) {
+        fill_error(response, auto_machine::err_code::ERR_INVALID_PARAM,
+                   "设备索引越界: " + std::to_string(device_index));
+        return;
+      }
+      port_lock = std::unique_lock<std::mutex>(
+          *port_closed_loop_guard_[device_index], std::try_to_lock);
+      if (!port_lock.owns_lock()) {
+        RCLCPP_WARN(get_logger(),
+                    "串口 %u 正在执行闭环命令，拒绝新的闭环命令 0x%s",
+                    static_cast<unsigned>(device_index), to_hex(command).c_str());
+        fill_error(response, auto_machine::err_code::ERR_BUSY,
+                   "串口 " + std::to_string(device_index) +
+                       " 正在执行闭环命令，请稍后重试");
+        return;
+      }
     }
 
     // 5. 执行命令处理函数（下发控制 / 读取查询）
@@ -353,6 +407,14 @@ private:
   /// 设备类型 -> (设备索引 -> (命令号 -> 处理函数))
   std::unordered_map<uint32_t, DeviceHandlerMap> handlers_;
   rclcpp::Service<AutoMachineSrv>::SharedPtr service_;
+  /// 命令服务回调组（可重入：允许不同串口的请求并发进入 handle_request）
+  rclcpp::CallbackGroup::SharedPtr command_callback_group_;
+  /// 串口数量（= 串口池长度）
+  size_t port_count_ = 1;
+  /// 执行器线程数（0 = 按串口数自动推导）
+  size_t executor_threads_ = 4;
+  /// 按串口索引的闭环占用锁：同一串口同时只允许一次「下发 + 闭环等待」
+  std::vector<std::unique_ptr<std::mutex>> port_closed_loop_guard_;
   /// 故障主动上报模块
   std::unique_ptr<auto_machine::FaultReporter> fault_reporter_;
   /// 控制命令闭环执行器（下发后自动查询状态直到到位/超时）
@@ -362,7 +424,14 @@ private:
 int main(int argc, char **argv) {
   rclcpp::init(argc, argv);
   auto node = std::make_shared<AutoMachineNode>();
-  rclcpp::spin(node);
+
+  // 多线程执行器：不同串口的请求由不同线程并行处理。
+  // 命令服务已挂到 Reentrant 回调组，否则多线程也只会串行执行。
+  rclcpp::executors::MultiThreadedExecutor executor(
+      rclcpp::ExecutorOptions(), node->executorThreads());
+  executor.add_node(node);
+  executor.spin();
+
   rclcpp::shutdown();
   return 0;
 }

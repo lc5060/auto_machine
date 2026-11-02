@@ -37,6 +37,7 @@ constexpr int32_t ERR_INTERNAL = 10005;          // 内部错误
 constexpr int32_t ERR_COMM = 10006;              // Modbus 通讯失败
 constexpr int32_t ERR_DEV_EXCEPTION = 10007;     // 设备返回 Modbus 异常码
 constexpr int32_t ERR_ACTION_TIMEOUT = 10008;    // 闭环控制：动作下发后，状态在超时时间内未达到目标值
+constexpr int32_t ERR_BUSY = 10009;              // 该串口已有闭环命令在执行，请稍后重试（不排队）
 }  // namespace err_code
 
 /**
