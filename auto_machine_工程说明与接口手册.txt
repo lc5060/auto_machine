@@ -96,12 +96,7 @@
     ├── install_rs485_udev.sh          一键安装规则（需 sudo）
     ├── test/                          各设备串口调试界面（tkinter，需 pyserial）
     ├── 自动机资料/                    厂商原始协议资料（xlsx / txt / 旧脚本）
-    ├── fake_modbus_slave.py           假从站（只应答，不模拟动作）
-    ├── fake_modbus_slave_closedloop.py 假从站（会模拟动作到位，闭环测试用）
-    ├── test_service_client.py         通用服务调用测试客户端
-    ├── test_closed_loop.py            闭环用例批量测试
-    ├── test_xyzr_client.py            XYZR 专项测试
-    ├── test_parallel.py               双串口并发验证
+    ├── fake_modbus_slave_closedloop.py 假从站（模拟动作到位，虚拟测试用）
     └── auto_machine_工程说明与接口手册.txt   本文件
 
 
@@ -855,9 +850,7 @@
    python3 -u $PWD/fake_modbus_slave_closedloop.py > /tmp/s1.log 2>&1 &
    sleep 2 && grep -h NODE_PORT /tmp/s0.log /tmp/s1.log
 
- 脚本选择：
-   fake_modbus_slave.py              只应答，用于核对指令帧
-   fake_modbus_slave_closedloop.py   会模拟动作到位，用于测闭环
+ 说明：一个实例提供一个虚拟串口，同一串口上同时模拟从站 0x01 与 0x02。
 
  【实机】
 
@@ -912,14 +905,7 @@
    自动机执行较长闭环期间，查询对齐装置主控状态，应毫秒级返回，
    且不出现 10006 / 10009。
 
- 步骤 4  批量脚本（可选）
-
-   python3 test_service_client.py     # 全设备单条
-   python3 test_closed_loop.py        # 闭环用例
-   python3 test_xyzr_client.py        # XYZR 专项
-   python3 test_parallel.py           # 双串口并发（需两个假从站）
-
- 步骤 5  故障上报（可选）
+ 步骤 4  故障上报（可选）
 
    ros2 service call /auto_machine/command auto_machine/srv/AutoMachine "{dev_type: 4, command: 4026531841, param_data: [1, 0]}"
    ros2 topic echo /auto_machine/fault
