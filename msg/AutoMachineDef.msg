@@ -6,6 +6,8 @@ uint32 DEV_MAG06 = 0x00000004
 uint32 DEV_A100 = 0x00000005
 
 uint32 DEV_XYZR = 0x10000001
+# XYZR1 对齐装置（U1/V6 配套，从站同为 0x02，寄存器布局与 XYZR 不同）
+uint32 DEV_XYZR1 = 0x10000002
 
 # ------ 命令号 ------
 
@@ -185,6 +187,22 @@ uint32 CMD_XYZR_ADJUST_CLOTH_STATUS_QUERY = 0x01010003
 uint32 CMD_XYZR_STATUS_QUERY = 0x01010004
 # 故障代码查询（输入寄存器 0x0003）
 uint32 CMD_XYZR_FAULT_CODE_QUERY = 0x01010007
+
+# XYZR1 对齐装置（U1/V6 配套，从站 0x02）
+# 复位
+uint32 CMD_XYZR1_RESET = 0x01020001
+# 大身布料已放好，触发视觉检测
+uint32 CMD_XYZR1_BODY_CLOTH_READY = 0x01020002
+# 口袋布已放好，触发视觉检测
+uint32 CMD_XYZR1_POCKET_CLOTH_READY = 0x01020003
+# 主控状态查询（输入寄存器 0x0001）
+uint32 CMD_XYZR1_MASTER_STATUS_QUERY = 0x01020004
+# 大身移料状态查询（输入寄存器 0x0003）
+uint32 CMD_XYZR1_BODY_MOVE_STATUS_QUERY = 0x01020005
+# 口袋移料状态查询（输入寄存器 0x0004）
+uint32 CMD_XYZR1_POCKET_MOVE_STATUS_QUERY = 0x01020006
+# 故障码查询（输入寄存器 0x0002）
+uint32 CMD_XYZR1_FAULT_CODE_QUERY = 0x01020007
 
 # ------ 全局命令号（不属于任何具体设备）------
 # 故障上报开关

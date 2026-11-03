@@ -17,6 +17,7 @@
 #include "auto_machine/auto_machine_t1.hpp"
 #include "auto_machine/auto_machine_v6.hpp"
 #include "auto_machine/auto_machine_xyzr.hpp"
+#include "auto_machine/auto_machine_xyzr1.hpp"
 #include "auto_machine/closed_loop.hpp"
 #include "auto_machine/fault_reporter.hpp"
 #include "auto_machine/modbus_rtu.hpp"
@@ -96,6 +97,7 @@ public:
     modbus_pool_[AutoMachineDef::DEV_T1] = mag_pool;
     modbus_pool_[AutoMachineDef::DEV_V6] = mag_pool;
     modbus_pool_[AutoMachineDef::DEV_XYZR] = mag_pool;
+    modbus_pool_[AutoMachineDef::DEV_XYZR1] = mag_pool;
     modbus_pool_[AutoMachineDef::DEV_MAG04] = mag_pool;
     modbus_pool_[AutoMachineDef::DEV_MAG06] = mag_pool;
 
@@ -167,7 +169,8 @@ private:
     return dev_type == AutoMachineDef::DEV_T1 ||
            dev_type == AutoMachineDef::DEV_V6 ||
            is_mag_device(dev_type) ||
-           dev_type == AutoMachineDef::DEV_XYZR;
+           dev_type == AutoMachineDef::DEV_XYZR ||
+           dev_type == AutoMachineDef::DEV_XYZR1;
   }
 
   /**
@@ -311,6 +314,13 @@ private:
       handlers_[AutoMachineDef::DEV_XYZR][static_cast<uint8_t>(i)] =
           auto_machine::createXyzrHandlers(
               modbus_pool_[AutoMachineDef::DEV_XYZR][i]);
+    }
+
+    // XYZR1 对齐装置（U1/V6 配套）：同样与自动机共用串口池
+    for (size_t i = 0; i < modbus_pool_[AutoMachineDef::DEV_XYZR1].size(); ++i) {
+      handlers_[AutoMachineDef::DEV_XYZR1][static_cast<uint8_t>(i)] =
+          auto_machine::createXyzr1Handlers(
+              modbus_pool_[AutoMachineDef::DEV_XYZR1][i]);
     }
 
     // MAG 设备：按串口池索引各建一套命令表

@@ -11,6 +11,7 @@
 #include "auto_machine/auto_machine_t1.hpp"
 #include "auto_machine/auto_machine_v6.hpp"
 #include "auto_machine/auto_machine_xyzr.hpp"
+#include "auto_machine/auto_machine_xyzr1.hpp"
 
 namespace auto_machine {
 
@@ -101,6 +102,28 @@ const std::vector<ClosedLoopBinding> kBindings = {
      xyzr_val::MASTER_DONE,
      true, xyzr_status::ADJUST_CLOTH, true, MatchType::EQ,
      xyzr_val::ADJUST_OK},
+
+    // ---------------- XYZR1（U1/V6 配套，从站 0x02，0x04 读输入寄存器） ----
+    // 注意：XYZR1 与上面 XYZR 从站地址相同但寄存器布局不同，
+    //       同一条总线只能挂其中一种，靠 dev_type 区分协议解析。
+    // 复位（回零）完成：主控状态(0x0001)=1（准备就绪）
+    {AutoMachineDef::DEV_XYZR1, AutoMachineDef::CMD_XYZR1_RESET,
+     XYZR1_MODBUS_ADDR, true, xyzr1_status::MASTER_STATUS, MatchType::EQ,
+     xyzr1_val::MASTER_READY},
+    // 大身布料已放好（两阶段）：
+    //   阶段1 主控状态=11（执行完成，等待确认）
+    //   阶段2 大身移料状态(0x0003)=1（移料成功，移到位）
+    {AutoMachineDef::DEV_XYZR1, AutoMachineDef::CMD_XYZR1_BODY_CLOTH_READY,
+     XYZR1_MODBUS_ADDR, true, xyzr1_status::MASTER_STATUS, MatchType::EQ,
+     xyzr1_val::MASTER_DONE,
+     true, xyzr1_status::BODY_MOVE_STATUS, true, MatchType::EQ,
+     xyzr1_val::MOVE_OK},
+    // 口袋布已放好（两阶段）：主控状态=11 → 口袋移料状态(0x0004)=1
+    {AutoMachineDef::DEV_XYZR1, AutoMachineDef::CMD_XYZR1_POCKET_CLOTH_READY,
+     XYZR1_MODBUS_ADDR, true, xyzr1_status::MASTER_STATUS, MatchType::EQ,
+     xyzr1_val::MASTER_DONE,
+     true, xyzr1_status::POCKET_MOVE_STATUS, true, MatchType::EQ,
+     xyzr1_val::MOVE_OK},
 };
 
 }  // namespace

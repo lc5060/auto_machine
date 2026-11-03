@@ -26,6 +26,7 @@ add_executable(auto_machine_node
   src/auto_machine_mag04.cpp
   src/auto_machine_mag06.cpp
   src/auto_machine_xyzr.cpp
+  src/auto_machine_xyzr1.cpp
   src/closed_loop.cpp
   src/fault_reporter.cpp
 )

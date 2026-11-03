@@ -76,6 +76,15 @@ XY_ADJUST_CLOTH = 0x0001  # 输入：移料结果
 XY_MASTER_STATUS = 0x0002  # 输入：主控状态
 XY_FAULT_CODE   = 0x0003  # 输入：故障代码
 
+# XYZR1（U1/V6 配套，同样是 slave=2，但寄存器布局与 XYZR 不同）
+XY1_RESET        = 0x0000  # 保持：复位
+XY1_BODY_READY   = 0x0001  # 保持：大身布料已放好
+XY1_POCKET_READY = 0x0002  # 保持：口袋布已放好
+XY1_MASTER_STATUS = 0x0001  # 输入：主控状态
+XY1_FAULT_CODE    = 0x0002  # 输入：故障码
+XY1_BODY_MOVE     = 0x0003  # 输入：大身移料状态
+XY1_POCKET_MOVE   = 0x0004  # 输入：口袋移料状态
+
 # 动作步骤：(延时秒, 空间'h'保持/'i'输入, 状态寄存器, 操作'set'赋值/'or'置位, 值)
 # key = (从站地址, 被写的控制寄存器, 写入值)
 ACTIONS = {
@@ -120,6 +129,33 @@ ACTIONS = {
          (1.5, 'i', XY_ADJUST_CLOTH, 'set', 1)],
 }
 
+# XYZR1（--profile u1v6）的 0x02 动作表：主控状态在 0x0001，两路移料 0x0003 / 0x0004
+ACTIONS_U1V6 = {
+    # 复位：主控 10(执行中) -> 1(准备就绪)
+    (2, XY1_RESET, 1):
+        [(0.1, 'i', XY1_MASTER_STATUS, 'set', 10),
+         (1.2, 'i', XY1_MASTER_STATUS, 'set', 1)],
+    # 大身布料：主控 10 -> 11(完成待确认)，同时大身移料=1
+    (2, XY1_BODY_READY, 1):
+        [(0.1, 'i', XY1_MASTER_STATUS, 'set', 10),
+         (1.0, 'i', XY1_MASTER_STATUS, 'set', 11),
+         (1.2, 'i', XY1_BODY_MOVE, 'set', 1)],
+    # 口袋布：主控 10 -> 11，同时口袋移料=1
+    (2, XY1_POCKET_READY, 1):
+        [(0.1, 'i', XY1_MASTER_STATUS, 'set', 10),
+         (1.0, 'i', XY1_MASTER_STATUS, 'set', 11),
+         (1.2, 'i', XY1_POCKET_MOVE, 'set', 1)],
+}
+
+
+def build_actions(profile):
+    """按 profile 选择 0x02 的动作表；m4m6 为默认（钉扣布局）。"""
+    if profile != 'u1v6':
+        return ACTIONS
+    merged = dict(ACTIONS)
+    merged.update(ACTIONS_U1V6)
+    return merged
+
 
 def crc16(data):
     crc = 0xFFFF
@@ -134,16 +170,25 @@ def crc16(data):
 
 
 class FakeSlave:
-    def __init__(self, fd):
+    def __init__(self, fd, profile='m4m6'):
         self.fd = fd
+        self.profile = profile
+        self.actions = build_actions(profile)
         self.lock = threading.Lock()
         # hold[slave][addr] 保持寄存器； inp[slave][addr] 输入寄存器
         self.hold = {1: {}, 2: {}}
         self.inp = {1: {}, 2: {}}
-        # XYZR 主控初始给 0(待机)，复位闭环才能看到 0->10->1 的过程
-        self.inp[2][XY_MASTER_STATUS] = 0
-        self.inp[2][XY_ADJUST_CLOTH] = 0
-        self.inp[2][XY_FAULT_CODE] = 0
+        if profile == 'u1v6':
+            # XYZR1 布局：主控状态在 0x0001，初始给 1(准备就绪)
+            self.inp[2][XY1_MASTER_STATUS] = 1
+            self.inp[2][XY1_FAULT_CODE] = 0
+            self.inp[2][XY1_BODY_MOVE] = 0
+            self.inp[2][XY1_POCKET_MOVE] = 0
+        else:
+            # XYZR 布局：主控初始给 0(待机)，复位闭环才能看到 0->10->1 的过程
+            self.inp[2][XY_MASTER_STATUS] = 0
+            self.inp[2][XY_ADJUST_CLOTH] = 0
+            self.inp[2][XY_FAULT_CODE] = 0
 
     def _table(self, space):
         return self.hold if space == 'h' else self.inp
@@ -210,7 +255,7 @@ class FakeSlave:
             self.reply(slave, body)  # 原样回显（XYZR 控制依赖此应答）
             print('[RX OK ] %s 从站=%d 写保持寄存器 0x%04X = %u'
                   % (frame[:-2].hex(' ').upper(), slave, addr, val), flush=True)
-            steps = ACTIONS.get((slave, addr, val))
+            steps = self.actions.get((slave, addr, val))
             if steps:
                 self.schedule(slave, steps)
 
@@ -268,15 +313,26 @@ class FakeSlave:
             self.handle(bytes([slave, func]) + rest)
 
 
+def parse_profile():
+    if '--profile' in sys.argv:
+        i = sys.argv.index('--profile')
+        if i + 1 < len(sys.argv):
+            return sys.argv[i + 1]
+    return 'm4m6'
+
+
 def main():
+    profile = parse_profile()
     master_fd, slave_fd = pty.openpty()
     slave_name = os.ttyname(slave_fd)
     print('===== 假 Modbus RTU 从站（闭环测试版）已启动 =====')
     print('NODE_PORT=%s' % slave_name)
     print('请把上面的路径作为 auto_machine 节点的 serial_port 参数')
     print('本从站会在收到控制命令后自动把状态翻到“完成值”，闭环应返回 success=true')
+    print('0x02 布局: %s' % ('XYZR1 / U1-V6（--profile u1v6）'
+                             if profile == 'u1v6' else 'XYZR / 钉扣（默认）'))
     print('等待请求...（Ctrl+C 退出）\n', flush=True)
-    FakeSlave(master_fd).run()
+    FakeSlave(master_fd, profile).run()
 
 
 if __name__ == '__main__':
