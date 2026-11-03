@@ -95,7 +95,7 @@
     │   └── 99-usb-rs485.rules         USB-485 固定软链接规则
     ├── install_rs485_udev.sh          一键安装规则（需 sudo）
     ├── test/                          各设备串口调试界面（tkinter，需 pyserial）
-    ├── 自动机资料/                    厂商原始协议资料（xlsx / txt / 旧脚本）
+    ├── 自动机资料/                    厂商原始协议资料（xlsx / txt）
     ├── fake_modbus_slave_closedloop.py 假从站（模拟动作到位，虚拟测试用）
     └── auto_machine_工程说明与接口手册.txt   本文件
 
