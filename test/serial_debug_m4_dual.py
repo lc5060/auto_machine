@@ -556,9 +556,9 @@ class Mag6DualDebugApp:
         paned.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
 
         self.ch1 = Mag6Channel(paned, "串口 1（0 号机）",
-                              preferred_port="/dev/ttyRS485_0")
+                              preferred_port="/dev/ttyRS4850")
         self.ch2 = Mag6Channel(paned, "串口 2（1 号机）",
-                              preferred_port="/dev/ttyRS485_1")
+                              preferred_port="/dev/ttyRS4851")
         paned.add(self.ch1, weight=1)
         paned.add(self.ch2, weight=1)
 

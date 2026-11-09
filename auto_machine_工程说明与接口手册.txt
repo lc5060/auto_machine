@@ -19,7 +19,7 @@
  二、安装与串口准备
      2.1 编译   2.2 udev 固定软链接
  三、启动节点
-     3.1 单串口   3.2 多串口 / 同口双从站   3.3 参数总表
+     3.1 单串口   3.2 多串口 / 同口双从站   3.3 一键启动（launch）   3.4 参数总表
  四、接口约定
      4.1 服务与话题   4.2 设备索引   4.3 三类命令   4.4 ret_data 换算
      4.5 错误码   4.6 并发行为与 10009
@@ -169,8 +169,8 @@
 
  【生成哪些名字】
    /dev/ttyRS485            单机通用名（所有 CP210x 都会生成，向后兼容）
-   /dev/ttyRS485_0          多机 0 号（按 USB 物理端口 KERNELS 匹配）
-   /dev/ttyRS485_1          多机 1 号（可换不同芯片，如 FTDI 0403:6015）
+   /dev/ttyRS4850           多机 0 号（按 USB 物理端口 KERNELS 匹配）
+   /dev/ttyRS4851           多机 1 号（可换不同芯片，如 FTDI 0403:6015）
 
  【先查每台设备的物理端口】
 
@@ -228,7 +228,7 @@
   两台自动机，各自一条总线，每条总线上挂「自动机 0x01 + XYZR 0x02」：
 
    ros2 run auto_machine auto_machine_node --ros-args \
-     -p "mag_serial_ports:=['/dev/ttyRS485_0','/dev/ttyRS485_1']"
+     -p "mag_serial_ports:=['/dev/ttyRS4850','/dev/ttyRS4851']"
 
    · 数组顺序 = 设备索引：第 0 个是 0 号机，第 1 个是 1 号机
    · 之后所有命令用 param_data[0] 指定索引：[0] 发 0 号机，[1] 发 1 号机
@@ -237,11 +237,35 @@
   只挂一台自动机但想用数组形式也可以：
 
    ros2 run auto_machine auto_machine_node --ros-args \
-     -p "mag_serial_ports:=['/dev/ttyRS485_0']"
+     -p "mag_serial_ports:=['/dev/ttyRS4850']"
 
 
 --------------------------------------------------------------------------------
- 3.3 参数总表
+ 3.3 一键启动（launch，含日志 bag 录制）
+--------------------------------------------------------------------------------
+
+  双串口模式一键启动（参数已固化，等价于 3.2 的命令）：
+
+   ros2 launch auto_machine auto_machine.launch.py
+
+  launch 同时做两件事：
+   1) 启动 auto_machine_node，串口固化为 /dev/ttyRS4850 + /dev/ttyRS4851
+   2) 自动用 ros2 bag record 录制 /rosout（节点全部日志），保存到
+      ~/bags/rosout_<启动时间戳>/，每次启动一个新目录，Ctrl+C 退出时自动落盘
+
+  日志查看：
+   · 实时看：终端直接有（output=both），或另开终端 ros2 topic echo /rosout
+   · 事后看：bag 是 mcap 格式，可转文本：
+       ros2 bag info ~/bags/rosout_XXXXXXXX_XXXXXX          # 查看概况
+       # 回放日志消息：
+       ros2 bag play ~/bags/rosout_XXXXXXXX_XXXXXX --topics /rosout
+   · 目录会随启动次数增长，定期清理旧目录即可
+
+  注：单串口/自定义串口场景仍用 3.1/3.2 的 ros2 run 方式传参。
+
+
+--------------------------------------------------------------------------------
+ 3.4 参数总表
 --------------------------------------------------------------------------------
 
   参数名                      默认值            说明
@@ -313,8 +337,8 @@
 
    param_data[0] = 串口索引，对应 mag_serial_ports 的第几个元素
 
-     [0]  → 0 号机（/dev/ttyRS485_0）
-     [1]  → 1 号机（/dev/ttyRS485_1）
+     [0]  → 0 号机（/dev/ttyRS4850）
+     [1]  → 1 号机（/dev/ttyRS4851）
 
    规则：
      · T1 / V6 / XYZR  —— 省略 param_data 时默认 0（兼容单机旧调用）

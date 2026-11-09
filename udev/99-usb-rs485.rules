@@ -7,7 +7,7 @@
 #
 # 规则说明：
 #   - 保留 /dev/ttyRS485 给单机场景（非 MAG 设备 T1/V6/XYZR，或只挂一台 MAG）。
-#   - 按 USB 物理端口分别生成 /dev/ttyRS485_0、/dev/ttyRS485_1 ...，索引顺序
+#   - 按 USB 物理端口分别生成 /dev/ttyRS4850、/dev/ttyRS4851 ...，索引顺序
 #     与启动节点时参数 mag_serial_ports 一一对应。
 #
 # 如何确定每台设备的物理端口（KERNELS 值）：
@@ -28,7 +28,7 @@ SUBSYSTEM=="tty", ATTRS{idVendor}=="10c4", ATTRS{idProduct}=="ea60", SYMLINK+="t
 
 # 多机：按物理端口区分
 # 0 号机（本机实际：CP210x 10c4:ea60，物理口 3-1.1）
-SUBSYSTEM=="tty", ATTRS{idVendor}=="10c4", ATTRS{idProduct}=="ea60", KERNELS=="3-1.1", SYMLINK+="ttyRS485_0", MODE="0666"
+SUBSYSTEM=="tty", ATTRS{idVendor}=="10c4", ATTRS{idProduct}=="ea60", KERNELS=="3-1.1", SYMLINK+="ttyRS4850", MODE="0666"
 
 # 1 号机（本机实际：FTDI 0403:6015，物理口 3-1.3）
-SUBSYSTEM=="tty", ATTRS{idVendor}=="0403", ATTRS{idProduct}=="6015", KERNELS=="3-1.3", SYMLINK+="ttyRS485_1", MODE="0666"
+SUBSYSTEM=="tty", ATTRS{idVendor}=="0403", ATTRS{idProduct}=="6015", KERNELS=="3-1.3", SYMLINK+="ttyRS4851", MODE="0666"

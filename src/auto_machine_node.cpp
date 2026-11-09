@@ -51,7 +51,7 @@ public:
     const std::string serial_port =
         declare_parameter<std::string>("serial_port", "/dev/ttyRS485");
     // 多串口列表，索引顺序对应 param_data[0]（所有设备类型通用）：
-    //   mag_serial_ports[0] -> /dev/ttyRS485_0，mag_serial_ports[1] -> /dev/ttyRS485_1 ...
+    //   mag_serial_ports[0] -> /dev/ttyRS4850，mag_serial_ports[1] -> /dev/ttyRS4851 ...
     // 为空时回退为单机（仅 serial_port，索引只接受 0），保证旧部署可直接运行。
     // 参数名沿用 mag_serial_ports，兼容既有启动脚本。
     const std::vector<std::string> mag_serial_ports =

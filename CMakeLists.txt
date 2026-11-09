@@ -46,5 +46,11 @@ install(TARGETS
   DESTINATION lib/${PROJECT_NAME}
 )
 
+# launch 文件安装（ros2 launch 需要）
+install(DIRECTORY
+  launch
+  DESTINATION share/${PROJECT_NAME}
+)
+
 ament_package()
 
