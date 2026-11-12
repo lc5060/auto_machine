@@ -73,8 +73,7 @@ M6_FUPING    = 0x1069
 XY_RESET       = 0x0000  # 保持：复位
 XY_CLOTH_READY = 0x0001  # 保持：布料就位/触发检测
 XY_ADJUST_CLOTH = 0x0001  # 输入：移料结果
-XY_MASTER_STATUS = 0x0002  # 输入：主控状态
-XY_FAULT_CODE   = 0x0003  # 输入：故障代码
+XY_MASTER_STATUS = 0x0002  # 输入：主控状态（100 = 发生故障；本设备无故障码寄存器）
 
 # XYZR1（U1/V6 配套，同样是 slave=2，但寄存器布局与 XYZR 不同）
 XY1_RESET        = 0x0000  # 保持：复位
@@ -188,7 +187,6 @@ class FakeSlave:
             # XYZR 布局：主控初始给 0(待机)，复位闭环才能看到 0->10->1 的过程
             self.inp[2][XY_MASTER_STATUS] = 0
             self.inp[2][XY_ADJUST_CLOTH] = 0
-            self.inp[2][XY_FAULT_CODE] = 0
 
     def _table(self, space):
         return self.hold if space == 'h' else self.inp

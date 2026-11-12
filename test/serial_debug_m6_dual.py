@@ -23,8 +23,8 @@ M6 寄存器（基址 0x1064，偏移与 MAG04 相同）：
   0x0000 RESET（0x06 写 1）
   0x0001 大身布料已放好（0x06 写 1；界面为闭环按钮，自动轮询到移料成功）
   0x0001 移料状态（0x04 读：0 失败 / 1 成功）
-  0x0002 主控状态（0x04 读：0/1/10/11/20/100）
-  0x0003 故障代码（0x04 读）
+  0x0002 主控状态（0x04 读：0/1/10/11/20/100，100 = 发生故障）
+  注：m4m6 协议输入寄存器仅 0x0000~0x0002，没有故障码寄存器。
 
 多机说明：
   界面左右并排「串口 1（0 号机）」「串口 2（1 号机）」两个独立面板，各自
@@ -82,8 +82,7 @@ ALIGN_REG_BODY_CLOTH_READY = 0x0001  # 大身布料已放好
 
 # 0x04 读输入寄存器
 ALIGN_REG_MOVE_STATUS = 0x0001       # 移料状态（移料后检测结果）
-ALIGN_REG_MASTER_STATUS = 0x0002     # 主控状态查询
-ALIGN_REG_FAULT_CODE = 0x0003        # 故障代码
+ALIGN_REG_MASTER_STATUS = 0x0002     # 主控状态查询（100 = 发生故障）
 
 # 对齐装置闭环轮询参数（与 auto_machine 节点默认一致）
 ALIGN_LOOP_DELAY_MS = 500
@@ -261,9 +260,6 @@ class Mag6Channel(ttk.Frame):
         ttk.Button(align_query_frame, text="查询主控状态",
                    command=self.query_align_master_status, width=16).grid(
             row=0, column=1, padx=6, pady=6)
-        ttk.Button(align_query_frame, text="查询故障代码",
-                   command=self.query_align_fault_code, width=16).grid(
-            row=0, column=2, padx=6, pady=6)
 
         # 通信日志
         log_frame = ttk.LabelFrame(self, text="通信日志")
@@ -465,13 +461,6 @@ class Mag6Channel(ttk.Frame):
     def query_align_master_status(self):
         v = self.read_register(ALIGN_SLAVE_ADDR, ALIGN_REG_MASTER_STATUS, 0x04)
         self.log("对齐-主控状态：{}".format(translate_master_status(v)))
-
-    def query_align_fault_code(self):
-        v = self.read_register(ALIGN_SLAVE_ADDR, ALIGN_REG_FAULT_CODE, 0x04)
-        if v is None:
-            self.log("对齐-故障代码：读取失败")
-        else:
-            self.log("对齐-故障代码：{} (0x{:04X})".format(v, v))
 
     # 大身布料已放好（闭环）：
     #   1) 写 0x0001=1 触发视觉检测/移料

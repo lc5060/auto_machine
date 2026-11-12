@@ -17,8 +17,8 @@ constexpr uint8_t XYZR_MODBUS_ADDR = 0x02;
 namespace xyzr_reg {
 constexpr uint16_t RESET = 0x0000;      // 复位 1-主控回零，其他值无效
 constexpr uint16_t CLOTH_READY = 0x0001;  // 布料已放好 1-触发视觉检测，其他值无效
-// 注：新协议写空间只保留 RESET 与 CLOTH_READY 两个寄存器，
-//     旧的 X/Y 移料距离寄存器（0x0002 / 0x0003）已删除，不要再加回来。
+// 注：协议中还有 X/Y 轴第一次移料距离寄存器（0x0002 / 0x0003，单位 mm），
+//     当前暂不实现（距离由设备侧固定），需要时再补命令。
 }  // namespace xyzr_reg
 
 /**
@@ -28,7 +28,8 @@ namespace xyzr_status {
 constexpr uint16_t RESERVED = 0x0000;         // 预留暂未用
 constexpr uint16_t ADJUST_CLOTH = 0x0001;     // 移料状态（移料后检测结果）
 constexpr uint16_t MASTER_STATUS = 0x0002;    // 主控状态
-constexpr uint16_t FAULT_CODE = 0x0003;       // 故障代码
+// 注：m4m6 协议输入寄存器仅 0~2，没有故障码寄存器；
+//     故障通过主控状态 == MASTER_FAULT(100) 判定，不要再加 FAULT_CODE。
 }  // namespace xyzr_status
 
 /**

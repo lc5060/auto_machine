@@ -49,13 +49,8 @@ int32_t XyzrProtocol::handle(uint32_t command, const uint8_t *param_data,
       ret_data = regsToBytes(regs);
       break;
 
-    case AutoMachineDef::CMD_XYZR_FAULT_CODE_QUERY:
-      // 故障代码查询（输入寄存器 0x0003）
-      if (!modbus_->readInputRegisters(slave_addr_, xyzr_status::FAULT_CODE, 1, regs)) {
-        return err_code::ERR_COMM;
-      }
-      ret_data = regsToBytes(regs);
-      break;
+    // 注：m4m6 协议无故障码寄存器，故障用 CMD_XYZR_STATUS_QUERY 读主控状态
+    //     判断（值 100 = 发生故障），原先读 0x0003 的实现已删除。
 
     default:
       return err_code::ERR_UNKNOWN_COMMAND;
@@ -72,7 +67,6 @@ HandlerMap createXyzrHandlers(std::shared_ptr<ModbusRtu> modbus) {
       AutoMachineDef::CMD_XYZR_START_VISON_DETECT,
       AutoMachineDef::CMD_XYZR_ADJUST_CLOTH_STATUS_QUERY,
       AutoMachineDef::CMD_XYZR_STATUS_QUERY,
-      AutoMachineDef::CMD_XYZR_FAULT_CODE_QUERY,
   };
   for (uint32_t cmd : cmds) {
     auto p = protocol;

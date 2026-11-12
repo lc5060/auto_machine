@@ -31,7 +31,9 @@
          11-执行完成，等待确认
          20-暂停
          100-发生故障
-  0x0003 故障代码
+
+         注：m4m6 协议输入寄存器仅 0x0000~0x0002，没有故障码寄存器，
+         故障用主控状态 100 判定（不要再去读 0x0003）。
 
 运行（需 pyserial）：
   pip3 install pyserial    # 若未安装
@@ -58,8 +60,7 @@ REG_BODY_CLOTH_READY    = 0x0001    # 大身布料已放好
 
 # 0x04 读输入寄存器地址
 REG_MOVE_STATUS         = 0x0001    # 移料状态（移料后检测结果）
-REG_MASTER_STATUS       = 0x0002    # 主控状态查询
-REG_FAULT_CODE          = 0x0003    # 故障代码
+REG_MASTER_STATUS       = 0x0002    # 主控状态查询（100 = 发生故障）
 
 # 闭环轮询参数（与 auto_machine 节点默认一致）
 CLOSED_LOOP_DELAY_MS = 500           # 下发后首次查询前的等待
@@ -162,8 +163,6 @@ class DingkouAlignControlApp:
                    width=18).grid(row=0, column=0, padx=6, pady=6)
         ttk.Button(query_frame, text="查询主控状态", command=self.query_master_status,
                    width=18).grid(row=0, column=1, padx=6, pady=6)
-        ttk.Button(query_frame, text="查询故障代码", command=self.query_fault_code,
-                   width=18).grid(row=0, column=2, padx=6, pady=6)
 
         # ---------- 通信日志区域 ----------
         log_frame = ttk.LabelFrame(root, text="通信日志")
@@ -332,18 +331,10 @@ class DingkouAlignControlApp:
         v = self.read_reg(REG_MOVE_STATUS)
         self.log("移料状态：{}".format(translate_move_status(v)))
 
-    # 主控状态  寄存器0x0002
+    # 主控状态  寄存器0x0002（值 100 表示发生故障，本设备无故障码寄存器）
     def query_master_status(self):
         v = self.read_reg(REG_MASTER_STATUS)
         self.log("主控状态：{}".format(translate_master_status(v)))
-
-    # 故障代码  寄存器0x0003
-    def query_fault_code(self):
-        v = self.read_reg(REG_FAULT_CODE)
-        if v is None:
-            self.log("故障代码：读取失败")
-        else:
-            self.log("故障代码：{} (0x{:04X})".format(v, v))
 
 
 if __name__ == "__main__":

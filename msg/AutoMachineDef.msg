@@ -185,8 +185,8 @@ uint32 CMD_XYZR_START_VISON_DETECT = 0x01010002
 uint32 CMD_XYZR_ADJUST_CLOTH_STATUS_QUERY = 0x01010003
 # 主控状态查询
 uint32 CMD_XYZR_STATUS_QUERY = 0x01010004
-# 故障代码查询（输入寄存器 0x0003）
-uint32 CMD_XYZR_FAULT_CODE_QUERY = 0x01010007
+# 注：XYZR（m4m6 协议）输入寄存器仅 0~2，无故障码寄存器；
+#     故障通过主控状态查询（值 100 表示发生故障）判定。
 
 # XYZR1 对齐装置（U1/V6 配套，从站 0x02）
 # 复位
